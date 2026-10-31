@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "profile": "wso2-apim-4.7.0-keycloak-26.8.1-candidate",
+  "registry": { "host": "registry.internal.example:5000", "project": "platform/wso2" },
+  "kubernetes": { "namespace": "wso2-platform", "context": "offline-production", "kubeconfig_path": "./secrets/kubeconfig", "storage_class": "shared-rwo" },
+  "oracle": {
+    "host": "oracle.internal.example",
+    "port": 1521,
+    "service_name": "W2DB.internal.example",
+    "connection_mode": "tcps",
+    "server_certificate_dn": "CN=oracle.internal.example,OU=Database,O=Example",
+    "trust_bundle_path": "./pki/oracle-trust.crt",
+    "connect_timeout_seconds": 8,
+    "read_timeout_seconds": 60,
+    "schema_mode": "initialize",
+    "apim_schema": "WSO2_APIM",
+    "shared_schema": "WSO2_SHARED",
+    "keycloak_schema": "KEYCLOAK",
+    "apim_runtime_account": "WSO2_APIM",
+    "apim_owner_account": "WSO2_APIM_OWNER",
+    "shared_runtime_account": "WSO2_SHARED",
+    "shared_owner_account": "WSO2_SHARED_OWNER",
+    "keycloak_runtime_account": "KEYCLOAK",
+    "keycloak_owner_account": "KEYCLOAK_OWNER"
+  },
+  "certificates": {
+    "mode": "generate",
+    "apim_hostname": "apim.example.org",
+    "gateway_hostname": "api.example.org",
+    "keycloak_hostname": "sso.example.org"
+  },
+  "deployment": { "cluster_dns_domain": "cluster.local" },
+  "artifacts": { "schema_manifest_path": "./offline-wso2-4.7.0/schema-artifacts.json" },
+  "distributed_throttle": {
+    "host": "redis-ha.internal.example",
+    "port": 6380,
+    "type": "redis",
+    "replication_mode": true,
+    "tls": true,
+    "trust_bundle_path": "./pki/redis-trust.crt"
+  }
+}

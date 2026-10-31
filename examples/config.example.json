@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "profile": "wso2-apim-4.7.0-keycloak-26.8.1-candidate",
+  "registry": {
+    "host": "registry.internal.example:5000",
+    "project": "platform/wso2"
+  }
+}

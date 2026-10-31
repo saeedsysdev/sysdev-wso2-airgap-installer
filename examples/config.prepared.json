@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "profile": "wso2-apim-4.7.0-keycloak-26.8.1-candidate",
+  "registry": { "host": "registry.internal.example:5000", "project": "platform/wso2" },
+  "kubernetes": { "namespace": "wso2-platform" },
+  "oracle": {
+    "host": "oracle.internal.example",
+    "port": 1521,
+    "service_name": "W2DB.internal.example",
+    "connection_mode": "tcp",
+    "connect_timeout_seconds": 8,
+    "read_timeout_seconds": 60,
+    "schema_mode": "prepared",
+    "apim_schema": "WSO2_APIM",
+    "shared_schema": "WSO2_SHARED",
+    "keycloak_schema": "KEYCLOAK",
+    "apim_runtime_account": "WSO2_APIM",
+    "shared_runtime_account": "WSO2_SHARED",
+    "keycloak_runtime_account": "KEYCLOAK"
+  },
+  "certificates": {
+    "mode": "import",
+    "external_certificate_path": "./pki/external.crt",
+    "external_private_key_path": "./pki/external.key",
+    "external_chain_path": "./pki/external-fullchain.crt",
+    "external_trust_path": "./pki/external-trust.crt",
+    "internal_certificate_path": "./pki/internal.crt",
+    "internal_private_key_path": "./pki/internal.key",
+    "internal_chain_path": "./pki/internal-fullchain.crt",
+    "internal_trust_path": "./pki/internal-trust.crt",
+    "apim_hostname": "apim.example.org",
+    "gateway_hostname": "api.example.org",
+    "keycloak_hostname": "sso.example.org"
+  },
+  "deployment": { "cluster_dns_domain": "cluster.local" },
+  "distributed_throttle": {
+    "host": "redis-ha.internal.example",
+    "port": 6380,
+    "type": "redis",
+    "replication_mode": true,
+    "tls": true,
+    "trust_bundle_path": "./pki/redis-trust.crt"
+  }
+}

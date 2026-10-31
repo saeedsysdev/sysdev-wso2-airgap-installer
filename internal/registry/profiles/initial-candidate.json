@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "profile_id": "wso2-apim-4.7.0-keycloak-26.8.1-candidate",
+  "profile_version": "0.1.0-candidate.1",
+  "wso2_api_manager": "4.7.0",
+  "wso2_jdk": "21 or 25",
+  "keycloak": "26.8.1",
+  "keycloak_container_jdk": "21",
+  "oracle": "19c (minimum 19.3)",
+  "oracle_jdbc_candidates": [
+    {"runtime": "Keycloak 26.8.1", "artifacts": ["ojdbc17", "orai18n"], "version": "23.26.2.0.0", "qualification": "documented by Keycloak for Oracle; WSO2 compatibility pending"}
+  ],
+  "components": [
+    {"name": "API Control Plane", "replicas": 2, "cpu_request": "1500m", "memory_request": "3Gi", "memory_limit": "3584Mi"},
+    {"name": "Resident Key Manager", "replicas": 2, "cpu_request": "1000m", "memory_request": "2Gi", "memory_limit": "2560Mi"},
+    {"name": "Traffic Manager", "replicas": 2, "cpu_request": "1500m", "memory_request": "3Gi", "memory_limit": "3584Mi"},
+    {"name": "Universal Gateway", "replicas": 2, "cpu_request": "2000m", "memory_request": "3Gi", "memory_limit": "3584Mi"},
+    {"name": "Keycloak", "replicas": 3, "cpu_request": "500m", "memory_request": "1Gi", "memory_limit": "1536Mi"}
+  ],
+  "node_ports": [
+    {"name": "Control plane and portals", "port": 30043, "target_port": 9443},
+    {"name": "Gateway HTTPS", "port": 30044, "target_port": 8243},
+    {"name": "Keycloak HTTPS", "port": 30045, "target_port": 8443}
+  ],
+  "images": [
+    {"component": "API Control Plane and resident Key Manager", "source_reference": "docker.io/wso2/wso2am-acp:4.7.0", "repository": "apim-acp-oracle", "tag": "4.7.0-r1"},
+    {"component": "Keycloak", "source_reference": "quay.io/keycloak/keycloak:26.8.1", "repository": "keycloak-oracle", "tag": "26.8.1-r1"},
+    {"component": "Traffic Manager", "source_reference": "docker.io/wso2/wso2am-tm:4.7.0", "repository": "wso2am-tm", "tag": "4.7.0"},
+    {"component": "Universal Gateway", "source_reference": "docker.io/wso2/wso2am-universal-gw:4.7.0", "repository": "wso2am-universal-gw", "tag": "4.7.0"}
+  ]
+}
