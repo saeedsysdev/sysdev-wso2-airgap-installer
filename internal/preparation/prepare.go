@@ -27,7 +27,16 @@ type Options struct {
 	Config              config.File
 	OutputDir, StateDir string
 	CheckOracle         bool
-	Now                 func() time.Time
+	// OracleCredentials are session-only credentials keyed by oracleprep.Account.CredentialKey.
+	// When nil, the CLI-compatible SYSDEV_ORACLE_* environment source is used.
+	OracleCredentials map[string]OracleCredential
+	OracleValidator   oracleprep.Validator
+	Now               func() time.Time
+}
+
+type OracleCredential struct {
+	Username string
+	Password string
 }
 type Report struct {
 	Application               string                  `json:"application"`
@@ -35,6 +44,8 @@ type Report struct {
 	ConfigurationSchema       int                     `json:"configuration_schema"`
 	SourceConfigurationSchema int                     `json:"source_configuration_schema"`
 	ReadOnly                  bool                    `json:"read_only"`
+	FileGenerationStatus      string                  `json:"file_generation_status"`
+	DeploymentReadiness       string                  `json:"deployment_readiness"`
 	OracleTarget              OracleTarget            `json:"oracle_target"`
 	Oracle                    oracleprep.Result       `json:"oracle"`
 	SchemaArtifacts           *schemaartifacts.Result `json:"schema_artifacts,omitempty"`
@@ -64,6 +75,9 @@ type AssetSummary struct {
 // Protected keys remain in StateDir; the method never contacts Kubernetes or
 // mutates an external service. Oracle access is strictly SELECT-only and opt-in.
 func Run(ctx context.Context, o Options) (Report, error) {
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -112,10 +126,15 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if o.Config.Oracle.SchemaMode != "" {
 		accounts := oracleAccounts(o.Config.Oracle)
 		if o.CheckOracle {
-			accounts = envAccounts(accounts)
-			r.Oracle = (oracleprep.Validator{}).Validate(ctx, o.Config.Oracle, accounts)
+			if o.OracleCredentials == nil {
+				accounts = envAccounts(accounts)
+			} else {
+				accounts = credentialAccounts(accounts, o.OracleCredentials)
+			}
+			validator := o.OracleValidator
+			r.Oracle = validator.Validate(ctx, o.Config.Oracle, accounts)
 		} else {
-			r.Oracle.Deferred = append(r.Oracle.Deferred, "Use --check-oracle to run bounded authenticated read-only SELECT validation.")
+			r.Oracle.Deferred = []string{"Authenticated Oracle validation was not requested; no Oracle login was attempted."}
 		}
 		if o.Config.Oracle.SchemaMode == "initialize" {
 			r.Oracle.Deferred = append(r.Oracle.Deferred, "Schema-owner credentials and exact release grants are not validated by the runtime-account metadata check; Stage 4 must verify them before any approved DDL.")
@@ -223,6 +242,12 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	sort.Strings(r.Blockers)
 	sort.Strings(r.Deferred)
+	r.FileGenerationStatus = "GENERATED"
+	if len(r.Blockers) == 0 {
+		r.DeploymentReadiness = "PREPARATION COMPLETE; DEPLOYMENT QUALIFICATION PENDING"
+	} else {
+		r.DeploymentReadiness = "BLOCKED; REVIEW PREPARATION FINDINGS"
+	}
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return r, errors.New("encode preparation review")
@@ -248,6 +273,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		fmt.Fprintf(&checksumText, "%s  %s\n", checksums[n], n)
 	}
 	if err := writeSafe(stage, "checksums.sha256", []byte(checksumText.String()), 0644); err != nil {
+		return r, err
+	}
+	if err := ctx.Err(); err != nil {
 		return r, err
 	}
 	if _, err := os.Lstat(out); err == nil {
@@ -278,6 +306,18 @@ func envAccounts(in []oracleprep.Account) []oracleprep.Account {
 			in[i].Username = user
 		}
 		in[i].Password = os.Getenv("SYSDEV_ORACLE_" + in[i].CredentialKey + "_PASSWORD")
+	}
+	return in
+}
+
+func credentialAccounts(in []oracleprep.Account, credentials map[string]OracleCredential) []oracleprep.Account {
+	for i := range in {
+		if credential, ok := credentials[in[i].CredentialKey]; ok {
+			if credential.Username != "" {
+				in[i].Username = credential.Username
+			}
+			in[i].Password = credential.Password
+		}
 	}
 	return in
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-dev - 2026-11-13
+
+- Added conditional Stage 3 Oracle, schema/account, certificate, artifact, and export-directory forms to the Bubble Tea wizard, with Back/Edit invalidation while retaining the existing registry and Kubernetes review evidence.
+- Connected the explicit Stage 3 export action to the existing `preparation.Run` service. Wizard Oracle passwords remain masked and session-only; the CLI continues to use its environment credential source.
+- Added cancellable, revision-correlated preparation results showing Oracle/schema/certificate findings, generated public files, blockers, deferred checks, and independent file-generation/deployment-readiness statuses.
+- Added fixture tests for wizard export, initialize-mode missing schema artifacts, deferred Oracle validation, credential redaction, cancellation, stale-result rejection, and conditional field editing; documented the interactive workflow and remaining qualification gates.
+
 ## 0.1.0-dev - 2026-11-01
 
 - Added configuration schema v2 for Oracle, PKI, deployment DNS, WSO2 schema artifact provenance, and replicated distributed-throttling endpoint inputs, with in-memory v1 migration.

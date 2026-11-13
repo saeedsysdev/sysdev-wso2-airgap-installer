@@ -2,7 +2,9 @@ package wizard
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,7 +14,9 @@ import (
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/cluster"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/domain"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/imagearchive"
+	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/oracleprep"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/plan"
+	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/preparation"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/registry"
 )
 
@@ -27,15 +31,27 @@ type checkedMsg struct {
 	err          error
 }
 
+type preparationFinishedMsg struct {
+	generation uint64
+	revision   uint64
+	report     preparation.Report
+	err        error
+}
+
 type Model struct {
 	service                                          *app.Service
 	state                                            State
 	step, editTarget                                 int
 	editing, editMode, checking, done, noColor, demo bool
+	preparing                                        bool
 	input, errText, logPath                          string
 	width, height                                    int
 	ctx                                              context.Context
 	checkCancel                                      context.CancelFunc
+	preparationCancel                                context.CancelFunc
+	preparationGeneration                            uint64
+	oracleValidator                                  oracleprep.Validator
+	editTargetPosition                               int
 	returnStep                                       int
 	checkGeneration                                  uint64
 	scroll                                           int
@@ -44,7 +60,7 @@ type Model struct {
 var labels = []string{"Registry host", "Project prefix", "Authentication", "Username or token", "Password", "Kubeconfig path (optional)", "Kubernetes context (optional)", "Target namespace (optional)", "Selected workers (comma-separated, optional)", "StorageClass (optional)", "Offline bundle directory (optional)", "Preflight inventory", "Review plan"}
 
 func New(service *app.Service, noColor bool, logPath string) *Model {
-	return &Model{service: service, noColor: noColor, logPath: logPath, ctx: context.Background(), state: State{AuthMode: "anonymous"}}
+	return &Model{service: service, noColor: noColor, logPath: logPath, ctx: context.Background(), state: State{AuthMode: "anonymous", StateDirectory: defaultStateDirectory()}}
 }
 
 func NewDemo(service *app.Service, noColor bool, logPath string) *Model {
@@ -90,11 +106,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state.InventoryStatus = "PASSED"
 			m.errText = ""
 		}
+	case preparationFinishedMsg:
+		if v.generation != m.preparationGeneration || v.revision != m.state.PreparationRevision || m.state.PreparationStatus != "RUNNING" {
+			return m, nil
+		}
+		m.preparing = false
+		m.preparationCancel = nil
+		if v.err != nil {
+			if errors.Is(v.err, context.Canceled) {
+				m.state.PreparationStatus = "CANCELED"
+				m.errText = "Local preparation canceled; no successful export was recorded."
+			} else {
+				m.state.PreparationStatus = "FAILED"
+				m.errText = "Local preparation failed: " + v.err.Error()
+			}
+			m.service.Log.Event("ERROR", "stage3-prepare", "Local preparation failed or was canceled", map[string]string{"revision": fmt.Sprint(v.revision), "canceled": fmt.Sprint(errors.Is(v.err, context.Canceled))})
+		} else {
+			m.state.PreparationStatus = v.report.FileGenerationStatus
+			m.state.PreparationReport = &v.report
+			m.errText = ""
+			m.service.Log.Event("INFO", "stage3-prepare", "Local preparation finished", map[string]string{"revision": fmt.Sprint(v.revision), "file_generation": v.report.FileGenerationStatus, "deployment_readiness": v.report.DeploymentReadiness, "blockers": fmt.Sprint(len(v.report.Blockers))})
+		}
 	case tea.KeyPressMsg:
 		key := v.String()
 		if key == "ctrl+c" {
 			if m.checkCancel != nil {
 				m.checkCancel()
+			}
+			if m.preparationCancel != nil {
+				m.preparationCancel()
 			}
 			m.done = true
 			return m, tea.Quit
@@ -128,6 +168,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.preparing {
+			if key == "esc" || key == "escape" {
+				if m.preparationCancel != nil {
+					m.preparationCancel()
+				}
+				m.preparationCancel = nil
+				m.preparationGeneration++
+				m.preparing = false
+				m.state.PreparationStatus = "CANCELED"
+				m.errText = "Local preparation canceled; no successful export was recorded."
+			}
+			return m, nil
+		}
 		if key == "esc" || key == "escape" {
 			m.back()
 			return m, nil
@@ -136,12 +189,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editing = true
 			m.editMode = true
 			m.returnStep = m.step
+			m.editTargetPosition = 0
 			m.step = -1
-			m.errText = "Edit: 1-9 select steps 1-9, 0 selects step 10, B selects step 11. Escape cancels."
+			m.errText = "Edit: use Up/Down and Enter to choose a field; shortcuts 1-9, 0, B select the first 11 configuration fields. Escape returns."
 			return m, nil
 		}
 		if key == "r" && m.step == 11 {
 			return m, m.checkPlan()
+		}
+		if m.step == preparationReviewStep && key == "e" {
+			if m.state.PreparationReport != nil {
+				m.errText = "This revision already has a generated export. Edit the public output directory to create a separate export."
+				return m, nil
+			}
+			return m, m.runPreparation()
 		}
 		if key == "enter" || key == "return" {
 			return m, m.submit()
@@ -150,7 +211,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = "Apply is unavailable in this milestone. No changes were made."
 			return m, nil
 		}
-		if m.step >= 0 && m.step < 11 {
+		if m.step >= 0 && (m.step < 11 || (m.step >= preparationFirstStep && m.step <= preparationLastField)) {
 			if key == "backspace" {
 				if len(m.input) > 0 {
 					m.input = m.input[:len(m.input)-1]
@@ -175,10 +236,34 @@ func (m *Model) handleEditKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.errText = ""
 			return nil
 		}
-		if (key >= "1" && key <= "9") || key == "0" || key == "b" || key == "B" {
-			m.step = editNumber(key) - 1
+		steps := m.editableSteps()
+		if len(steps) == 0 {
+			return nil
+		}
+		if key == "down" || key == "j" {
+			m.editTargetPosition = min(m.editTargetPosition+1, len(steps)-1)
+			return nil
+		}
+		if key == "up" || key == "k" {
+			m.editTargetPosition = max(m.editTargetPosition-1, 0)
+			return nil
+		}
+		if key == "enter" || key == "return" {
+			m.step = steps[m.editTargetPosition]
 			m.input = m.valueFor(m.step)
+			if m.step >= preparationFirstStep {
+				m.input = m.preparationValue(m.step)
+			}
 			m.errText = ""
+			return nil
+		}
+		if (key >= "1" && key <= "9") || key == "0" || key == "b" || key == "B" {
+			choice := editNumber(key) - 1
+			if choice >= 0 && choice < 11 {
+				m.step = choice
+				m.input = m.valueFor(m.step)
+				m.errText = ""
+			}
 		}
 		return nil
 	}
@@ -337,6 +422,28 @@ func (m *Model) submit() tea.Cmd {
 		}
 		return nil
 	}
+	if m.step >= preparationFirstStep && m.step <= preparationLastField {
+		if err := m.setPreparationValue(m.step, m.input); err != nil {
+			m.errText = err.Error()
+			return nil
+		}
+		m.errText = ""
+		m.service.Log.Event("INFO", "stage3-input", "Preparation input updated", map[string]string{"field": labels[m.step], "revision": fmt.Sprint(m.state.PreparationRevision)})
+		if m.editMode {
+			m.editing = false
+			m.editMode = false
+			m.step = m.returnStep
+			m.input = ""
+			return nil
+		}
+		m.step = m.nextPreparationStep(m.step)
+		if m.step <= preparationLastField {
+			m.input = m.preparationValue(m.step)
+		} else {
+			m.input = ""
+		}
+		return nil
+	}
 	if m.step == 11 {
 		if m.demo {
 			m.step = 12
@@ -352,6 +459,15 @@ func (m *Model) submit() tea.Cmd {
 		return nil
 	}
 	if m.step == 12 {
+		if m.demo {
+			m.done = true
+			return tea.Quit
+		}
+		m.step = preparationFirstStep
+		m.input = m.preparationValue(m.step)
+		return nil
+	}
+	if m.step == preparationReviewStep {
 		m.done = true
 		return tea.Quit
 	}
@@ -445,6 +561,22 @@ func editNumber(key string) int {
 }
 
 func (m *Model) back() {
+	if m.step == preparationReviewStep {
+		m.step = m.previousPreparationStep(m.step)
+		m.input = m.preparationValue(m.step)
+		m.errText = ""
+		return
+	}
+	if m.step >= preparationFirstStep {
+		m.step = m.previousPreparationStep(m.step)
+		if m.step >= preparationFirstStep {
+			m.input = m.preparationValue(m.step)
+		} else {
+			m.input = ""
+		}
+		m.errText = ""
+		return
+	}
 	if m.step == 11 {
 		m.step = 10
 		m.input = m.valueFor(m.step)
@@ -496,15 +628,15 @@ func (m *Model) View() tea.View {
 	switch m.step {
 	case -1:
 		b.WriteString("Choose a field to edit:\n")
-		for i := 0; i < 11; i++ {
-			key := fmt.Sprint(i + 1)
-			if i == 9 {
-				key = "0"
+		steps := m.editableSteps()
+		start := max(0, min(m.editTargetPosition-5, len(steps)-14))
+		end := min(len(steps), start+14)
+		for pos := start; pos < end; pos++ {
+			prefix := "  "
+			if pos == m.editTargetPosition {
+				prefix = "> "
 			}
-			if i == 10 {
-				key = "B"
-			}
-			fmt.Fprintf(&b, "  %s. %s\n", key, labels[i])
+			fmt.Fprintf(&b, "%s%s\n", prefix, labels[steps[pos]])
 		}
 	case 0:
 		writeWrapped(&b, "Registry host and optional port (for example: registry.internal:5000). Do not enter a URL scheme.", m.width, "")
@@ -638,6 +770,98 @@ func (m *Model) View() tea.View {
 			}
 		}
 		b.WriteString("\nNo changes are authorized or performed by this review. Apply is unavailable.\n")
+	default:
+		if m.step >= preparationFirstStep && m.step <= preparationLastField {
+			field, _ := m.preparationField(m.step)
+			writeWrapped(&b, field.prompt, m.width, "")
+			if field.secret {
+				b.WriteByte('\n')
+				writeWrapped(&b, field.label+": "+strings.Repeat("*", len([]rune(m.input))), m.width, "")
+			} else {
+				b.WriteByte('\n')
+				writeWrapped(&b, field.label+": "+m.input, m.width, "")
+			}
+			if field.key == "external_cert" || field.key == "internal_cert" {
+				writeWrapped(&b, "Use | between the four paths; the chain entry can be empty (for example cert.pem|key.pem||trust.pem).", m.width, "")
+			}
+		} else if m.step == preparationReviewStep {
+			b.WriteString("STAGE 3 LOCAL PREPARATION REVIEW\n\n")
+			if m.preparing {
+				b.WriteString("RUNNING: validating local inputs and generating the redacted export. Press Esc to cancel.\n")
+			} else if report := m.state.PreparationReport; report != nil {
+				fmt.Fprintf(&b, "File generation: %s | Deployment readiness: %s\n", report.FileGenerationStatus, report.DeploymentReadiness)
+				writeWrapped(&b, "Public export: "+m.state.OutputDirectory, m.width, "")
+				writeWrapped(&b, "Protected state: "+m.state.StateDirectory, m.width, "")
+				fmt.Fprintf(&b, "Oracle check: %s (read-only: %t)\n", report.Oracle.Status, report.Oracle.ReadOnly)
+				for _, check := range report.Oracle.Checks {
+					writeWrapped(&b, "Oracle "+check.Account+": "+check.Status+" - "+check.Detail, m.width, "  ")
+				}
+				if report.SchemaArtifacts != nil {
+					writeWrapped(&b, fmt.Sprintf("Schema artifacts: %s for %s %s; source %s SHA-256 %s; %d script(s)", report.SchemaArtifacts.Status, report.SchemaArtifacts.Product, report.SchemaArtifacts.Version, report.SchemaArtifacts.SourceIdentity, report.SchemaArtifacts.SourceSHA256, len(report.SchemaArtifacts.Scripts)), m.width, "")
+					for _, script := range report.SchemaArtifacts.Scripts {
+						writeWrapped(&b, fmt.Sprintf("Schema script %s -> %s (order %d, SHA-256 %s)", script.Path, script.TargetSchema, script.Order, script.SHA256), m.width, "  ")
+					}
+					for _, item := range report.SchemaArtifacts.Blockers {
+						writeWrapped(&b, "Schema artifact blocker: "+item, m.width, "  - ")
+					}
+					for _, item := range report.SchemaArtifacts.Deferred {
+						writeWrapped(&b, "Schema artifact deferred: "+item, m.width, "  - ")
+					}
+				} else {
+					b.WriteString("Schema artifacts: not supplied or not required by prepared mode.\n")
+				}
+				fmt.Fprintf(&b, "Certificates: %d service certificate(s); root %s\n", len(report.Certificates.Certificates), report.Certificates.Root.Subject)
+				for _, cert := range report.Certificates.Certificates {
+					writeWrapped(&b, fmt.Sprintf("Certificate %s SANs=%s expires=%s trust=%s", cert.Purpose, strings.Join(cert.SANs, ","), cert.NotAfter, cert.Trust), m.width, "  ")
+				}
+				b.WriteString("Generated public files and SHA-256:\n")
+				fileNames := make([]string, 0, len(report.Files))
+				for name := range report.Files {
+					fileNames = append(fileNames, name)
+				}
+				sort.Strings(fileNames)
+				for _, name := range fileNames {
+					writeWrapped(&b, name+"  "+report.Files[name], m.width, "  ")
+				}
+				b.WriteString("Blockers:\n")
+				if len(report.Blockers) == 0 {
+					b.WriteString("  None\n")
+				}
+				for _, item := range report.Blockers {
+					writeWrapped(&b, item, m.width, "  - ")
+				}
+				b.WriteString("Deferred checks:\n")
+				if len(report.Deferred) == 0 {
+					b.WriteString("  None\n")
+				}
+				for _, item := range report.Deferred {
+					writeWrapped(&b, item, m.width, "  - ")
+				}
+			} else {
+				cfg := m.preparationConfig()
+				fmt.Fprintf(&b, "Oracle target: %s host=%s port=%d service=%s descriptor=%s\n", m.state.OracleTargetKind, cfg.Oracle.Host, cfg.Oracle.Port, cfg.Oracle.ServiceName, cfg.Oracle.ConnectDescriptor)
+				writeWrapped(&b, fmt.Sprintf("Oracle transport=%s DN=%s wallet=%s trust=%s timeouts=%ds/%ds", cfg.Oracle.ConnectionMode, cfg.Oracle.ServerCertificateDN, cfg.Oracle.WalletPath, cfg.Oracle.TrustBundlePath, cfg.Oracle.ConnectTimeoutSeconds, cfg.Oracle.ReadTimeoutSeconds), m.width, "")
+				writeWrapped(&b, fmt.Sprintf("Schema mode=%s schemas=%s,%s,%s runtime accounts=%s,%s,%s owner accounts=%s,%s,%s", cfg.Oracle.SchemaMode, cfg.Oracle.APIMSchema, cfg.Oracle.SharedSchema, cfg.Oracle.KeycloakSchema, cfg.Oracle.APIMRuntimeAccount, cfg.Oracle.SharedRuntimeAccount, cfg.Oracle.KeycloakRuntimeAccount, cfg.Oracle.APIMOwnerAccount, cfg.Oracle.SharedOwnerAccount, cfg.Oracle.KeycloakOwnerAccount), m.width, "")
+				oracleAuthStatus := "deferred"
+				if m.state.CheckOracle {
+					oracleAuthStatus = "requested; credentials are session-only and masked"
+				}
+				writeWrapped(&b, "Authenticated Oracle validation: "+oracleAuthStatus, m.width, "")
+				fmt.Fprintf(&b, "Certificates: %s | %s, %s, %s | cluster DNS %s\n", cfg.Certificates.Mode, cfg.Certificates.APIMHostname, cfg.Certificates.GatewayHostname, cfg.Certificates.KeycloakHostname, cfg.Deployment.ClusterDNSDomain)
+				if cfg.Certificates.Mode == "import" {
+					writeWrapped(&b, fmt.Sprintf("External cert/key/chain/trust: %s | %s | %s | %s", cfg.Certificates.ExternalCertificatePath, cfg.Certificates.ExternalPrivateKeyPath, cfg.Certificates.ExternalChainPath, cfg.Certificates.ExternalTrustPath), m.width, "")
+					writeWrapped(&b, fmt.Sprintf("Internal cert/key/chain/trust: %s | %s | %s | %s", cfg.Certificates.InternalCertificatePath, cfg.Certificates.InternalPrivateKeyPath, cfg.Certificates.InternalChainPath, cfg.Certificates.InternalTrustPath), m.width, "")
+				}
+				writeWrapped(&b, "WSO2 distribution: "+cfg.Artifacts.WSO2DistributionPath, m.width, "")
+				writeWrapped(&b, "WSO2 distribution SHA-256: "+cfg.Artifacts.WSO2DistributionSHA256, m.width, "")
+				writeWrapped(&b, "Schema manifest: "+cfg.Artifacts.SchemaManifestPath, m.width, "")
+				writeWrapped(&b, fmt.Sprintf("Distributed throttle: %s:%d type=%s replicated=%t TLS=%t trust=%s", cfg.DistributedThrottle.Host, cfg.DistributedThrottle.Port, cfg.DistributedThrottle.Type, cfg.DistributedThrottle.ReplicationMode, cfg.DistributedThrottle.TLS, cfg.DistributedThrottle.TrustBundlePath), m.width, "")
+				writeWrapped(&b, "Public output: "+m.state.OutputDirectory, m.width, "")
+				writeWrapped(&b, "Protected state: "+m.state.StateDirectory, m.width, "")
+				b.WriteString("No preparation export exists for this revision. Press e to run local preparation.\n")
+			}
+			writeWrapped(&b, "Preparation only. This does not run DDL or apply cluster/identity resources.", m.width, "")
+		}
 	}
 	if m.errText != "" {
 		b.WriteString("\nStatus: " + m.errText + "\n")
@@ -645,7 +869,10 @@ func (m *Model) View() tea.View {
 	if m.checking {
 		b.WriteString("\nStatus: RUNNING - registry manifest checks are cancellable with Esc.\n")
 	}
-	writeWrapped(&b, "Enter: continue/check/review | Esc: back/cancel check | Ctrl-E: edit (1-9, 0, B) | r: retry | PageUp/PageDown: scroll | F1: help | Ctrl-C: cancel", m.width, "")
+	if m.preparing {
+		b.WriteString("\nStatus: RUNNING - local preparation is cancellable with Esc.\n")
+	}
+	writeWrapped(&b, "Enter: continue/check/review | e: generate Stage 3 export on its review step | Esc: back/cancel | Ctrl-E: edit fields | r: retry inventory | PageUp/PageDown: scroll | F1: help | Ctrl-C: cancel", m.width, "")
 	writeWrapped(&b, "Log: "+m.logPath, m.width, "")
 	b.WriteString(domain.Attribution + "\n")
 	v := tea.NewView(fitContent(b.String(), m.height, m.scroll))

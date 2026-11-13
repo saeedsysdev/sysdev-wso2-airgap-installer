@@ -10,7 +10,19 @@
 - `prepare --config PATH --output NEW_DIRECTORY --state-dir PROTECTED_DIRECTORY [--check-oracle]` verifies local Stage 3 inputs and generates a non-mutating deployment preparation. Runtime account variables are `SYSDEV_ORACLE_APIM_USERNAME/PASSWORD`, `SYSDEV_ORACLE_SHARED_USERNAME/PASSWORD`, and `SYSDEV_ORACLE_KEYCLOAK_USERNAME/PASSWORD`. Optional initialization-owner checks use `SYSDEV_ORACLE_APIM_OWNER_USERNAME/PASSWORD`, `SYSDEV_ORACLE_SHARED_OWNER_USERNAME/PASSWORD`, and `SYSDEV_ORACLE_KEYCLOAK_OWNER_USERNAME/PASSWORD`. Values remain process-only and are never printed.
 - `status`, `verify`, support export, and `apply` are not available yet. They fail with a clear message and perform no installation mutation.
 
-The wizard requests a registry host (without a scheme), optional project prefix, and anonymous/Basic/Bearer credentials. It queries only the four profile references. Password/token entry is masked and credentials remain session-only. `Esc` returns to the prior step or cancels an active registry check; `Ctrl-E` selects a field to edit; `r` retries the inventory; `F1` shows help; `Ctrl-C` exits. The log path remains visible in the footer.
+The wizard requests a registry host (without a scheme), optional project prefix, and anonymous/Basic/Bearer credentials. It queries only the four profile references. Password/token entry is masked and credentials remain session-only. `Esc` returns to the prior step or cancels an active check; `Ctrl-E` opens the field editor; `r` retries the inventory; `F1` shows help; `Ctrl-C` exits. The log path remains visible in the footer.
+
+After the integrated preflight and review, press `Enter` to open the Stage 3 local preparation form. The prompts collect:
+
+- Oracle target type (`service` or `descriptor`), host/service or credential-free connect descriptor, TCP/TCPS mode, TCPS DN and wallet/trust paths, timeouts, prepared/initialize schema mode, and APIM/shared/Keycloak schemas and runtime/optional owner accounts.
+- Whether to run authenticated read-only Oracle metadata checks. Choosing `yes` asks for masked session-only runtime passwords and, when owner accounts are configured, owner passwords. Choosing `no` records Oracle validation as deferred. These wizard credentials are passed directly to the preparation service and are not written to environment variables, config, logs, or output.
+- Certificate `generate` or `import` mode, public service hostnames, cluster DNS domain, and (for import) external/internal certificate, private-key, optional chain, and trust paths. Import paths are entered as four pipe-separated values; leave the optional chain slot empty, for example `cert.pem|key.pem||trust.pem`.
+- Optional exact-release WSO2 distribution archive path and SHA-256, the local schema artifact manifest path, a new public output directory, and a separate protected state directory. Initialize mode without a valid schema manifest exports a blocked review so the missing artifact is visible.
+- Optional distributed Redis/Valkey host, port, type, replication mode, and TLS trust inputs used by the candidate deployment asset review.
+
+Mode-specific questions are skipped. Use `Esc` to go back, `Ctrl-E` then Up/Down and `Enter` to edit a field, and `Backspace` to correct input. Editing Stage 3 settings invalidates the preparation review while preserving unrelated registry results. Namespace, hostname, and cluster DNS changes invalidate dependent certificate/assets results. At **Stage 3 preparation review/export**, inspect the Oracle, schema, certificate, file, blocker, and deferred-check results, then press `e` for the explicit local export. Export runs asynchronously and can be canceled with `Esc`; a canceled or stale result is not shown as generated. File generation and deployment readiness are reported separately. A generated export can still be blocked or unqualified; this path never applies resources or runs schema DDL.
+
+The deterministic `demo` command remains fixture-only and exits from its review without offering a real preparation export. Use `wizard` for operator-supplied Stage 3 inputs.
 
 ## Interpreting a registry result
 
