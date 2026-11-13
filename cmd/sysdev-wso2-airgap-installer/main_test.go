@@ -20,7 +20,9 @@ import (
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/app"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/auditlog"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/config"
+	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/execution"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/imagearchive"
+	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/preparation"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/registry"
 )
 
@@ -61,6 +63,50 @@ func TestNonInteractivePlanUsesRealRegistryProviderWithoutMutation(t *testing.T)
 func TestSubcommandHelpIsSuccessful(t *testing.T) {
 	if err := run([]string{"plan", "--help"}); err != nil {
 		t.Fatalf("subcommand help returned an error: %v", err)
+	}
+}
+
+func TestApplyCLIRequiresSpecificReviewedPlanAndFinalConfirmation(t *testing.T) {
+	root := t.TempDir()
+	prepared := filepath.Join(root, "prepared")
+	state := filepath.Join(root, "protected")
+	if err := os.MkdirAll(filepath.Join(prepared, "assets"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	asset := []byte("fixture asset\n")
+	if err := os.WriteFile(filepath.Join(prepared, "assets", "fixture.txt"), asset, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(asset)
+	report := preparation.Report{FileGenerationStatus: "GENERATED", Files: map[string]string{"assets/fixture.txt": hex.EncodeToString(sum[:])}}
+	review, _ := json.Marshal(report)
+	if err := os.WriteFile(filepath.Join(prepared, "review.json"), review, 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := []byte("fixture metadata\n")
+	if err := os.WriteFile(filepath.Join(prepared, "metadata.json"), metadata, 0600); err != nil {
+		t.Fatal(err)
+	}
+	reviewSum, metadataSum := sha256.Sum256(review), sha256.Sum256(metadata)
+	checksums := hex.EncodeToString(sum[:]) + "  assets/fixture.txt\n" + hex.EncodeToString(reviewSum[:]) + "  review.json\n" + hex.EncodeToString(metadataSum[:]) + "  metadata.json\n"
+	if err := os.WriteFile(filepath.Join(prepared, "checksums.sha256"), []byte(checksums), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.File{SchemaVersion: config.SchemaVersion, Profile: registry.Profile.ID, Registry: config.Registry{Host: "registry.example.test"}, Kubernetes: config.Kubernetes{Namespace: "wso2"}}
+	p, err := execution.BuildPlan(cfg, prepared, state, execution.Target{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(root, "reviewed-plan.json")
+	if err := execution.WritePlan(planPath, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"apply", "--plan", planPath, "--log-dir", filepath.Join(root, "logs")}); err == nil || !strings.Contains(err.Error(), "final authorization not supplied") {
+		t.Fatalf("Apply did not require final explicit confirmation: %v", err)
+	}
+	err = run([]string{"apply", "--plan", planPath, "--confirm", "--log-dir", filepath.Join(root, "logs-confirmed")})
+	if err == nil || !strings.Contains(err.Error(), "unresolved blocker") {
+		t.Fatalf("CLI did not reject blockers before reaching an Apply adapter: %v", err)
 	}
 }
 

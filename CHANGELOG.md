@@ -2,6 +2,14 @@
 
 ## 0.1.0-dev - 2026-11-13
 
+- Added a versioned Stage 4 execution-plan and protected checkpoint model with configuration, target, profile, registry digest, and prepared-artifact binding.
+- Added a shared fail-closed Apply orchestrator with explicit confirmation, pre-mutation rechecks, ordered image/Oracle/Kubernetes/readiness steps, cancellation boundaries, reconciliation before resume, and uncertain-DDL handling; added fixture adapter coverage for registry-only image reuse and recovery.
+- Added CLI execution-plan export, explicit `apply --plan ... --confirm`, and checkpoint `status` inspection. Production registry-import, Oracle, and Kubernetes adapters and the wizard Apply confirmation remain gated and are not claimed as implemented.
+- Fixed protected PKCS#12/JKS password generation to use printable Java-compatible characters and replace legacy non-encodable random bytes; added regression coverage.
+- Documented the current execution boundary, recovery limits, and remaining Stage 4 qualification work.
+
+## 0.1.0-dev - 2026-11-13
+
 - Added conditional Stage 3 Oracle, schema/account, certificate, artifact, and export-directory forms to the Bubble Tea wizard, with Back/Edit invalidation while retaining the existing registry and Kubernetes review evidence.
 - Connected the explicit Stage 3 export action to the existing `preparation.Run` service. Wizard Oracle passwords remain masked and session-only; the CLI continues to use its environment credential source.
 - Added cancellable, revision-correlated preparation results showing Oracle/schema/certificate findings, generated public files, blockers, deferred checks, and independent file-generation/deployment-readiness statuses.

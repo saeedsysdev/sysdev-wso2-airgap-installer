@@ -122,6 +122,27 @@ func TestGenerateReusesCAAndLeavesAndCreatesJavaCompatibleStores(t *testing.T) {
 	}
 }
 
+func TestProtectedKeystorePasswordsAreJavaCompatibleASCII(t *testing.T) {
+	store, err := secretstore.Open(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put("legacy-password", []byte{0x01, 0xff, 0x00, 0x80}); err != nil {
+		t.Fatal(err)
+	}
+	password, err := protectedRandom(store, "legacy-password", 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(password) != 24 || !javaPasswordSafe(password) {
+		t.Fatalf("stored Java password is not a printable UCS-2-safe value: %q", password)
+	}
+	second, err := protectedRandom(store, "legacy-password", 24)
+	if err != nil || !bytes.Equal(password, second) {
+		t.Fatalf("protected Java password was not reused: %v", err)
+	}
+}
+
 func TestImportedCertificatesCheckMismatchSANExpiryAndChain(t *testing.T) {
 	for _, tc := range []struct {
 		name                        string

@@ -485,20 +485,35 @@ func loadOrCreateLeaf(s *secretstore.Store, ca *x509.Certificate, caKey *ecdsa.P
 func protectedRandom(s *secretstore.Store, name string, n int) ([]byte, error) {
 	b, err := s.Get(name)
 	if err == nil {
-		if len(b) != n {
-			return nil, errors.New("stored keystore password has invalid length")
+		if len(b) == n && javaPasswordSafe(b) {
+			return b, nil
 		}
-		return b, nil
+		clear(b)
 	}
 	b = make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return nil, errors.New("generate keystore password")
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	for i := range b {
+		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
+		if err != nil {
+			clear(b)
+			return nil, errors.New("generate keystore password")
+		}
+		b[i] = alphabet[index.Int64()]
 	}
 	if err := s.Put(name, b); err != nil {
 		clear(b)
 		return nil, err
 	}
 	return b, nil
+}
+
+func javaPasswordSafe(value []byte) bool {
+	for _, ch := range value {
+		if ch < 0x21 || ch > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 func parseCert(b []byte) (*x509.Certificate, error) {
 	p, _ := pem.Decode(b)

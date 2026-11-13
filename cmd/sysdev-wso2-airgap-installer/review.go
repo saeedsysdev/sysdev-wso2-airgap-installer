@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -11,13 +12,18 @@ import (
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/cluster"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/config"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/domain"
+	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/execution"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/imagearchive"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/plan"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/registry"
 	"github.com/saeedsysdev/sysdev-wso2-airgap-installer/internal/version"
 )
 
-func runConfigured(ctx context.Context, cmd string, service *app.Service, cfg config.File, logPath string) error {
+type ReviewedPlanOptions struct {
+	PreparedDirectory, StateDirectory, PlanPath string
+}
+
+func runConfigured(ctx context.Context, cmd string, service *app.Service, cfg config.File, logPath string, planOptions ...ReviewedPlanOptions) error {
 	caPath := cfg.Registry.CABundlePath
 	if caPath == "" {
 		caPath = os.Getenv("SYSDEV_REGISTRY_CA_BUNDLE")
@@ -75,6 +81,34 @@ func runConfigured(ctx context.Context, cmd string, service *app.Service, cfg co
 	p := plan.BuildFull(plan.Input{Revision: 1, RegistryHost: cfg.Registry.Host, Project: cfg.Registry.Project, Images: images, Cluster: clusterInfo, ClusterError: clusterError, Archive: archiveResult, ArchiveError: archiveError})
 	fmt.Printf("%s %s\n%s\nIntegrated read-only preflight | configuration schema %d\nLog: %s\n", domain.ApplicationName, version.Current, domain.Attribution, cfg.SchemaVersion, logPath)
 	printInventory(p)
+	if cmd == "plan" && len(planOptions) > 0 && planOptions[0].PlanPath != "" {
+		o := planOptions[0]
+		if o.PreparedDirectory == "" {
+			return fmt.Errorf("writing an execution plan requires --prepared DIRECTORY (log: %s)", logPath)
+		}
+		if o.StateDirectory == "" {
+			base, e := os.UserConfigDir()
+			if e != nil {
+				return fmt.Errorf("resolve protected state directory (log: %s)", logPath)
+			}
+			o.StateDirectory = filepath.Join(base, "SysdevWso2AirgapInstaller", "state")
+		}
+		target := execution.Target{}
+		if clusterInfo != nil {
+			target = execution.Target{Cluster: clusterInfo.Cluster, Context: clusterInfo.Context, APIEndpoint: clusterInfo.APIEndpoint, Namespace: clusterInfo.Namespace}
+		}
+		executionPlan, e := execution.BuildPlan(cfg, o.PreparedDirectory, o.StateDirectory, target, images, p.Blockers)
+		if e != nil {
+			return fmt.Errorf("build execution plan: %w (log: %s)", e, logPath)
+		}
+		if e = execution.WritePlan(o.PlanPath, executionPlan); e != nil {
+			return fmt.Errorf("write execution plan: %w (log: %s)", e, logPath)
+		}
+		fmt.Printf("\nVersioned execution plan written: %s\nPlan identity: %s\n", o.PlanPath, executionPlan.ID)
+		for _, blocker := range executionPlan.Blockers {
+			fmt.Println("APPLY BLOCKER:", blocker)
+		}
+	}
 	if cmd == "validate" && len(p.Blockers) > 0 {
 		return fmt.Errorf("preflight has %d blocker(s); no changes were made (log: %s)", len(p.Blockers), logPath)
 	}

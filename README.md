@@ -3,7 +3,7 @@
 **Version:** `0.1.0-dev`
 **Developed and Supported by SaeedSysDev**
 
-An English-language Go terminal application for preparing a WSO2 API Manager 4.7.0 / Keycloak 26.8.1 deployment for an air-gapped Kubernetes environment. It verifies remote registry platform coverage, local OCI/Docker image bundles, and read-only Kubernetes preflight, then presents an editable non-mutating review plan. Stage 3 adds a separate local preparation/export command for Oracle, PKI, secret references, and candidate deployment assets. Apply remains unavailable, so this is not yet a deployment installer.
+An English-language Go terminal application for preparing a WSO2 API Manager 4.7.0 / Keycloak 26.8.1 deployment for an air-gapped Kubernetes environment. It verifies registry platform coverage, local OCI/Docker image bundles, and read-only Kubernetes preflight, then presents an editable review. Stage 3 adds local preparation/export for Oracle, PKI, secret references, and candidate deployment assets. Stage 4 now adds versioned execution plans and fixture-tested checkpoint/resume orchestration. Production Apply adapters and the wizard's final Apply confirmation remain gated, so this is not yet a deployment installer.
 
 ## Current usable slice
 

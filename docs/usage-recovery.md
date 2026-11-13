@@ -8,7 +8,9 @@
 - `verify-archive --bundle PATH` validates a local bundle independently and displays distinct archive/config/manifest/index/layer/DiffID evidence.
 - `validate --config PATH` and `plan --config PATH [--bundle PATH]` parse versioned configuration and run the same exact-reference registry checks, optional bundle verification, and optional Kubernetes preflight without reading stdin. Credentials can be supplied via `SYSDEV_REGISTRY_USERNAME`/`SYSDEV_REGISTRY_PASSWORD` or `SYSDEV_REGISTRY_TOKEN`; `SYSDEV_REGISTRY_CA_BUNDLE` selects a custom CA bundle.
 - `prepare --config PATH --output NEW_DIRECTORY --state-dir PROTECTED_DIRECTORY [--check-oracle]` verifies local Stage 3 inputs and generates a non-mutating deployment preparation. Runtime account variables are `SYSDEV_ORACLE_APIM_USERNAME/PASSWORD`, `SYSDEV_ORACLE_SHARED_USERNAME/PASSWORD`, and `SYSDEV_ORACLE_KEYCLOAK_USERNAME/PASSWORD`. Optional initialization-owner checks use `SYSDEV_ORACLE_APIM_OWNER_USERNAME/PASSWORD`, `SYSDEV_ORACLE_SHARED_OWNER_USERNAME/PASSWORD`, and `SYSDEV_ORACLE_KEYCLOAK_OWNER_USERNAME/PASSWORD`. Values remain process-only and are never printed.
-- `status`, `verify`, support export, and `apply` are not available yet. They fail with a clear message and perform no installation mutation.
+- `plan --config CONFIG --prepared DIR --execution-plan FILE` performs the existing read-only inventory and writes a versioned plan bound to the prepared files, configuration, registry digests, target context, and namespace. The plan is rejected for Apply when inputs or required checks are unresolved.
+- `apply --plan FILE --confirm [--resume]` requires a specific plan and a final explicit confirmation. `status --plan FILE` reads its protected checkpoint. The shared execution journal/orchestrator and fixture adapters are implemented, but the production registry-import, Oracle/schema, and Kubernetes adapters are not connected yet; the CLI stops before mutation with an explicit adapter-unavailable error. Wizard Apply confirmation is also pending.
+- `verify` and support export remain unavailable.
 
 The wizard requests a registry host (without a scheme), optional project prefix, and anonymous/Basic/Bearer credentials. It queries only the four profile references. Password/token entry is masked and credentials remain session-only. `Esc` returns to the prior step or cancels an active check; `Ctrl-E` opens the field editor; `r` retries the inventory; `F1` shows help; `Ctrl-C` exits. The log path remains visible in the footer.
 
@@ -34,6 +36,18 @@ The deterministic `demo` command remains fixture-only and exits from its review 
 
 Kubernetes preflight reads metadata and submits SelfSubjectAccessReview calls for specific planned verbs. The checks are not permission to apply. StorageClass metadata does not establish RWX, successful provisioning, or failover. The NodePort default range is an explicit `30000-32767` assumption unless an operator-supplied range is configured. Capacity is a conservative bounded CPU/memory assessment and not the scheduler, HA certification, or a 400 TPS result. The single-control-plane and external-single-Oracle limitations remain visible.
 
-The review plan is not an install authorization. Apply and automated recovery are not implemented. No cleanup or reverse migration is performed by this version.
+The generated execution plan is a review artifact, not an authorization. Inspect its target, digest-pinned images, schema actions, Kubernetes changes, and blockers before using `apply --plan FILE --confirm`. Current production Apply remains gated because the real environment adapters, secret materialization, exact-release evidence checks, and wizard final confirmation are pending. The fixture execution path demonstrates ordering and resume behavior only; it does not deploy resources. Checkpoints are protected by the selected state-directory ACL and keyed to the plan identity. The current lock prevents concurrent Apply for one protected state directory within one process; independent processes are not fenced. A process crash can leave a checkpoint; use `status --plan FILE`, then explicitly resume only after read-only reconciliation. Uncertain Oracle DDL requires operator reconciliation. No schema is dropped and no uncertain DDL is replayed automatically.
+
+Suggested command sequence (all config and artifact paths are operator supplied):
+
+```text
+sysdev-wso2-airgap-installer prepare --config CONFIG --output PREPARED --state-dir PROTECTED_STATE
+sysdev-wso2-airgap-installer plan --config CONFIG --prepared PREPARED --state-dir PROTECTED_STATE --execution-plan REVIEWED_PLAN
+sysdev-wso2-airgap-installer apply --plan REVIEWED_PLAN --confirm
+sysdev-wso2-airgap-installer status --plan REVIEWED_PLAN
+sysdev-wso2-airgap-installer apply --plan REVIEWED_PLAN --confirm --resume
+```
+
+The last three commands remain fail-closed for real changes until the production adapters are qualified and connected. `prepare`, `plan`, and `demo` remain non-mutating with respect to external systems.
 
 The Stage 3 examples show the required field shapes. The prepared-schema/import example needs operator-supplied PEM files whose SANs cover the configured external and internal endpoints. The initialization/generated-certificate example emits public artifacts and protected keys while explicitly blocking on its missing offline WSO2 SQL artifact manifest. Preparation does not contact Kubernetes even when the config contains a kubeconfig path; only `validate`/`plan` perform read-only Kubernetes discovery.
